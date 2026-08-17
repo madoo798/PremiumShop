@@ -1,0 +1,8 @@
+aiogram>=3.0.0
+aiocryptopay>=0.2.7
+python-dotenv>=1.0.0
+streamlit>=1.20.0
+streamlit-option-menu>=0.3.6
+pandas>=2.0.0
+libsql>=0.1.11
+Flask>=3.0.0
