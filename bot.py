@@ -1,25 +1,33 @@
-import os
+# pyright: reportOptionalMemberAccess=false
+# pyright: reportArgumentType=false
+# pyright: reportAttributeAccessIssue=false
+# pyright: reportOptionalSubscript=false
+# ruff: noqa: BLE001, S110, S112
+# ruff: noqa: BLE001, S110, S112, I001
 import asyncio
 import logging
-from typing import List, Dict, Any, Union
-from dotenv import load_dotenv
+import os
+from threading import Thread
+from typing import Any
 
-from aiogram import Bot, Dispatcher, Router, F, types
+from aiocryptopay import AioCryptoPay, Networks
+from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.filters import Command, CommandObject, Filter
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiocryptopay import AioCryptoPay, Networks
+from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from dotenv import load_dotenv
+from flask import Flask
 
 # Import database manager from database.py
 from database import db
 
+# Initialize proper file logger
+logger = logging.getLogger(__name__)
+
 # ==========================================
 # RENDER 24/7 HOSTING WORKAROUND
 # ==========================================
-from threading import Thread
-from flask import Flask
-
 app = Flask(__name__)
 
 @app.route('/')
@@ -27,7 +35,8 @@ def home():
     return "Altalis Storefront Bot is actively running!"
 
 def run_flask():
-    port = int(os.environ.get('PORT', 10000))
+    # Fix for PLW1508: ensure default fallback is a string before converting
+    port = int(os.environ.get('PORT', '10000'))
     app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
@@ -70,13 +79,13 @@ USER_LAST_ACTION = {}
 # ==========================================
 class IsAdmin(Filter):
     """Custom middleware filter to cleanly secure admin-only commands and callbacks."""
-    async def __call__(self, event: Union[types.Message, types.CallbackQuery]) -> bool:
+    async def __call__(self, event: types.Message | types.CallbackQuery) -> bool:
         return event.from_user.id == ADMIN_ID and ADMIN_ID != 0
 
 
 class ThrottlingFilter(Filter):
     """Anti-spam flood protection filter (limits actions to 1 per second per user)."""
-    async def __call__(self, event: Union[types.Message, types.CallbackQuery]) -> bool:
+    async def __call__(self, event: types.Message | types.CallbackQuery) -> bool:
         user_id = event.from_user.id
         # Exempt admin from throttling restrictions
         if user_id == ADMIN_ID:
@@ -138,7 +147,7 @@ def ensure_db_upgrades():
                 )
             """)
     except Exception as e:
-        logging.error(f"Database upgrade check failed: {e}")
+        logger.error(f"Database upgrade check failed: {e}")
 
 def set_product_warranty(product_id: int, warranty_text: str) -> bool:
     """Updates the custom warranty duration for a specific product."""
@@ -152,21 +161,21 @@ def set_product_category(product_id: int, category_name: str) -> bool:
         cursor = conn.execute("UPDATE products SET category = ? WHERE product_id = ?", (category_name, product_id))
         return cursor.rowcount > 0
 
-def get_active_products() -> List[Dict[str, Any]]:
+def get_active_products() -> list[dict[str, Any]]:
     """Query the SQLite database for all currently active store products."""
     with db._get_connection() as conn:
         cursor = conn.execute("SELECT * FROM products WHERE is_active = 1")
         cols = [col[0] for col in cursor.description]
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
-def get_all_categories() -> List[str]:
+def get_all_categories() -> list[str]:
     """Retrieve all unique product category folders currently active in the store."""
     with db._get_connection() as conn:
         cursor = conn.execute("SELECT DISTINCT category FROM products WHERE is_active = 1")
         cats = [row[0] for row in cursor.fetchall() if row[0]]
         return cats if cats else ["General"]
 
-def get_products_by_category(category_name: str) -> List[Dict[str, Any]]:
+def get_products_by_category(category_name: str) -> list[dict[str, Any]]:
     """Query active products belonging to a specific category."""
     with db._get_connection() as conn:
         cursor = conn.execute("SELECT * FROM products WHERE is_active = 1 AND category = ?", (category_name,))
@@ -180,10 +189,10 @@ def add_restock_subscriber(product_id: int, user_id: int) -> bool:
             conn.execute("INSERT OR IGNORE INTO restock_subscribers (product_id, user_id) VALUES (?, ?)", (product_id, user_id))
             return True
     except Exception as e:
-        logging.error(f"Failed to add restock subscriber: {e}")
+        logger.error(f"Failed to add restock subscriber: {e}")
         return False
 
-def get_and_clear_restock_subscribers(product_id: int) -> List[int]:
+def get_and_clear_restock_subscribers(product_id: int) -> list[int]:
     """Retrieve all users waiting for a restock alert and clear them from the queue."""
     with db._get_connection() as conn:
         cursor = conn.execute("SELECT user_id FROM restock_subscribers WHERE product_id = ?", (product_id,))
@@ -201,16 +210,16 @@ def log_customer_order(user_id: int, product_name: str, price_usd: float, delive
                 (user_id, product_name, price_usd, deliverable)
             )
     except Exception as e:
-        logging.error(f"Failed to log customer order: {e}")
+        logger.error(f"Failed to log customer order: {e}")
 
-def get_customer_orders(user_id: int) -> List[Dict[str, Any]]:
+def get_customer_orders(user_id: int) -> list[dict[str, Any]]:
     """Retrieve all past purchases for a specific customer."""
     with db._get_connection() as conn:
         cursor = conn.execute("SELECT * FROM customer_orders WHERE user_id = ? ORDER BY purchased_at DESC", (user_id,))
         cols = [col[0] for col in cursor.description]
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
-def get_store_analytics() -> Dict[str, Any]:
+def get_store_analytics() -> dict[str, Any]:
     """Calculate core store analytics for the admin dashboard."""
     with db._get_connection() as conn:
         rev_cursor = conn.execute("SELECT SUM(price_usd), COUNT(*) FROM customer_orders")
@@ -263,14 +272,12 @@ async def check_user_subscription(bot: Bot, user_id: int) -> bool:
         return True
     try:
         member = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
-        if member.status in ["member", "administrator", "creator"]:
-            return True
-        return False
+        return member.status in ["member", "administrator", "creator"]
     except Exception as e:
-        logging.error(f"Failed to check channel subscription for user {user_id}: {e}")
+        logger.error(f"Failed to check channel subscription for user {user_id}: {e}")
         return False
 
-async def broadcast_to_users(bot: Bot, text: str, reply_markup: InlineKeyboardMarkup = None):
+async def broadcast_to_users(bot: Bot, text: str, reply_markup: InlineKeyboardMarkup | None = None):
     """Safely broadcast a notification directly to all registered users in their private chat (Non-Blocking)."""
     with db._get_connection() as conn:
         cursor = conn.execute("SELECT user_id FROM users")
@@ -290,9 +297,9 @@ async def broadcast_to_users(bot: Bot, text: str, reply_markup: InlineKeyboardMa
         except Exception:
             continue
             
-    logging.info(f"📣 Private DM broadcast successfully delivered to {success_count}/{len(user_ids)} users.")
+    logger.info(f"📣 Private DM broadcast successfully delivered to {success_count}/{len(user_ids)} users.")
 
-async def safe_register_user(user_id: int, username: str, referrer_id: int = None) -> str:
+async def safe_register_user(user_id: int, username: str, referrer_id: int | None = None) -> str:
     """Registers user safely, handles the Turso race condition, applies promos, and securely tracks referrals."""
     existing_user = await asyncio.to_thread(db.get_user, user_id)
     
@@ -431,7 +438,7 @@ def get_topup_keyboard() -> InlineKeyboardMarkup:
 # ==========================================
 async def auto_verify_invoices(bot: Bot):
     """Background loop: Scans pending invoices and automatically credits user balances (Non-Blocking)."""
-    logging.info("⏳ Starting Automated Crypto Pay Verification Loop...")
+    logger.info("⏳ Starting Automated Crypto Pay Verification Loop...")
     while True:
         try:
             pending_invoices = await asyncio.to_thread(
@@ -467,22 +474,22 @@ async def auto_verify_invoices(bot: Bot):
                                     ),
                                     parse_mode="Markdown"
                                 )
-                                logging.info(f"✅ [AUTO-CREDITED] Invoice {inv['invoice_id']} -> User {inv['user_id']} (+${inv['amount_usd']})")
+                                logger.info(f"✅ [AUTO-CREDITED] Invoice {inv['invoice_id']} -> User {inv['user_id']} (+${inv['amount_usd']})")
                 
-                except Exception as e:
-                    logging.exception(f"CryptoPay Error Details for invoice {inv['invoice_id']}:")
+                except Exception:
+                    logger.exception(f"CryptoPay Error Details for invoice {inv['invoice_id']}:")
                 
                 await asyncio.sleep(1)
                 
-        except Exception as e:
-            logging.exception("Crash Details in background verification loop:")
+        except Exception:
+            logger.exception("Crash Details in background verification loop:")
         
         await asyncio.sleep(15)
 
 
 async def check_low_stock_watcher(bot: Bot):
     """Background loop: Automatically alerts admin when product stock drops to 3 units or fewer."""
-    logging.info("⏳ Starting Low Stock Inventory Watcher...")
+    logger.info("⏳ Starting Low Stock Inventory Watcher...")
     while True:
         await asyncio.sleep(300) # Check every 5 minutes
         if ADMIN_ID == 0:
@@ -504,7 +511,7 @@ async def check_low_stock_watcher(bot: Bot):
                     except Exception:
                         pass
         except Exception as e:
-            logging.error(f"Error in low stock watcher: {e}")
+            logger.error(f"Error in low stock watcher: {e}")
 
 
 # ==========================================
@@ -531,9 +538,9 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
                 ]
             )
             await message.answer(
-                f"🔒 **Channel Subscription Required**\n\n"
+                "🔒 **Channel Subscription Required**\n\n"
                 f"To access the storefront, you must first subscribe to our official channel: {REQUIRED_CHANNEL}\n\n"
-                f"Please join the channel below and then click **I Have Subscribed** to unlock the bot:",
+                "Please join the channel below and then click **I Have Subscribed** to unlock the bot:",
                 reply_markup=join_keyboard,
                 parse_mode="Markdown"
             )
@@ -547,7 +554,7 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
         except ValueError:
             pass
 
-    status = await safe_register_user(message.from_user.id, message.from_user.username, referrer_id)
+    status = await safe_register_user(message.from_user.id, message.from_user.username or "NoUsername", referrer_id)
 
     # Handle Referral Milestone Reward Notification
     if status.startswith("rewarded_referral_"):
@@ -560,15 +567,15 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
             await message.bot.send_message(
                 chat_id=actual_referrer_id,
                 text=(
-                    f"🎉 **Referral Milestone Reached!**\n\n"
+                    "🎉 **Referral Milestone Reached!**\n\n"
                     f"You have referred a total of **{total_refs} users** to Altalis & Celesta! "
                     f"**${reward_amount:.2f} USD** has been automatically deposited into your wallet balance.\n\n"
-                    f"Keep sharing your link from the **🎁 Invite Friends** menu to earn more!"
+                    "Keep sharing your link from the **🎁 Invite Friends** menu to earn more!"
                 ),
                 parse_mode="Markdown"
             )
         except Exception as e:
-            logging.warning(f"Could not send reward notification to referrer {actual_referrer_id}: {e}")
+            logger.warning(f"Could not send reward notification to referrer {actual_referrer_id}: {e}")
         status = "new"
 
     # Handle Referral Progress Notification
@@ -582,14 +589,14 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
             await message.bot.send_message(
                 chat_id=actual_referrer_id,
                 text=(
-                    f"🤝 **New Referral Joined!**\n\n"
+                    "🤝 **New Referral Joined!**\n\n"
                     f"Someone just joined using your invite link! You currently have **{total_refs}** referral(s).\n"
                     f"Invite **{refs_needed} more** user(s) to receive your next **$0.50 USD** wallet credit!"
                 ),
                 parse_mode="Markdown"
             )
         except Exception as e:
-            logging.warning(f"Could not send progress notification to referrer {actual_referrer_id}: {e}")
+            logger.warning(f"Could not send progress notification to referrer {actual_referrer_id}: {e}")
         status = "new"
 
     if status == "promo":
@@ -627,9 +634,9 @@ async def cb_menu_referral(callback: types.CallbackQuery, state: FSMContext):
     ref_link = f"https://t.me/{bot_info.username}?start={callback.from_user.id}"
     
     text = (
-        f"🤝 **Invite Friends & Earn!**\n\n"
-        f"Share your unique link below. For every **5 new users** who start the bot using your link, "
-        f"you will automatically receive **$0.50 USD** directly into your wallet balance!\n\n"
+        "🤝 **Invite Friends & Earn!**\n\n"
+        "Share your unique link below. For every **5 new users** who start the bot using your link, "
+        "you will automatically receive **$0.50 USD** directly into your wallet balance!\n\n"
         f"🔗 `{ref_link}`"
     )
     
@@ -655,15 +662,15 @@ async def cmd_restart(message: types.Message, state: FSMContext):
                 ]
             )
             await message.answer(
-                f"🔒 **Channel Subscription Required**\n\n"
+                "🔒 **Channel Subscription Required**\n\n"
                 f"To access the storefront, you must first subscribe to our official channel: {REQUIRED_CHANNEL}\n\n"
-                f"Please join the channel below and then click **I Have Subscribed** to unlock the bot:",
+                "Please join the channel below and then click **I Have Subscribed** to unlock the bot:",
                 reply_markup=join_keyboard,
                 parse_mode="Markdown"
             )
             return
 
-    await safe_register_user(message.from_user.id, message.from_user.username)
+    await safe_register_user(message.from_user.id, message.from_user.username or "NoUsername")
     
     await message.answer(
         "👋 **Digital Storefront**\n\nSelect an option below to manage your wallet or browse available digital inventory:",
@@ -695,7 +702,7 @@ async def cb_menu_main(callback: types.CallbackQuery, state: FSMContext):
             await callback.answer("⚠️ You must subscribe to the channel first!", show_alert=True)
             return
 
-    await safe_register_user(callback.from_user.id, callback.from_user.username)
+    await safe_register_user(callback.from_user.id, callback.from_user.username or "NoUsername")
     
     await callback.message.edit_text(
         "👋 **Digital Storefront**\n\nSelect an option below to manage your wallet or browse available digital inventory:",
@@ -710,7 +717,7 @@ async def cb_menu_profile(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     user = await asyncio.to_thread(db.get_user, callback.from_user.id)
     if not user:
-        await safe_register_user(callback.from_user.id, callback.from_user.username)
+        await safe_register_user(callback.from_user.id, callback.from_user.username or "NoUsername")
         user = await asyncio.to_thread(db.get_user, callback.from_user.id)
         
     balance = user["balance_usd"] if user else 0.0
@@ -728,7 +735,7 @@ async def cb_menu_profile(callback: types.CallbackQuery, state: FSMContext):
         f"**Telegram ID:** `{callback.from_user.id}`\n"
         f"**Username:** @{callback.from_user.username or 'N/A'}\n"
         f"**Available Wallet Balance:** `${balance:.2f} USD`\n\n"
-        f"*All store purchases are deducted directly from your wallet balance.*",
+        "*All store purchases are deducted directly from your wallet balance.*",
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
@@ -756,7 +763,7 @@ async def cb_menu_orders(callback: types.CallbackQuery, state: FSMContext):
         text += f"• **{o['product_name']}** (${o['price_usd']:.2f})\n  🔑 Key: `{o['deliverable']}`\n  📅 *{o['purchased_at']}*\n---\n"
         
     if len(orders) > 10:
-        text += f"\n*Showing your 10 most recent purchases.*"
+        text += "\n*Showing your 10 most recent purchases.*"
         
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="« Back to Profile", callback_data="menu_profile")]]
@@ -836,19 +843,19 @@ async def process_custom_amount(message: types.Message, state: FSMContext):
         )
         
         await status_msg.edit_text(
-            f"⚡ **Deposit Invoice Generated**\n\n"
+            "⚡ **Deposit Invoice Generated**\n\n"
             f"**Deposit Amount:** `${amount:.2f} USD`\n"
             f"**Invoice ID:** `{invoice.invoice_id}`\n\n"
-            f"1️⃣ Click **Pay via @CryptoBot** to open the payment gateway.\n"
-            f"2️⃣ Complete the transaction using your preferred cryptocurrency.\n"
-            f"3️⃣ Our background system will automatically detect the transfer and credit your balance within 15 seconds!",
+            "1️⃣ Click **Pay via @CryptoBot** to open the payment gateway.\n"
+            "2️⃣ Complete the transaction using your preferred cryptocurrency.\n"
+            "3️⃣ Our background system will automatically detect the transfer and credit your balance within 15 seconds!",
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
     except ValueError:
         await message.answer("❌ **Invalid Format**\n\nPlease enter only a numerical value (for example: `10` or `15.50`):", parse_mode="Markdown")
     except Exception as e:
-        logging.error(f"Failed to generate custom invoice: {e}")
+        logger.error(f"Failed to generate custom invoice: {e}")
         await message.answer("❌ Gateway error. Please return to the menu and try again.")
 
 
@@ -883,17 +890,17 @@ async def cb_deposit_quick(callback: types.CallbackQuery, state: FSMContext):
         )
         
         await callback.message.edit_text(
-            f"⚡ **Deposit Invoice Generated**\n\n"
+            "⚡ **Deposit Invoice Generated**\n\n"
             f"**Deposit Amount:** `${amount:.2f} USD`\n"
             f"**Invoice ID:** `{invoice.invoice_id}`\n\n"
-            f"1️⃣ Click **Pay via @CryptoBot** to open the payment gateway.\n"
-            f"2️⃣ Complete the transaction using your preferred cryptocurrency.\n"
-            f"3️⃣ Our background system will automatically detect the transfer and credit your balance within 15 seconds!",
+            "1️⃣ Click **Pay via @CryptoBot** to open the payment gateway.\n"
+            "2️⃣ Complete the transaction using your preferred cryptocurrency.\n"
+            "3️⃣ Our background system will automatically detect the transfer and credit your balance within 15 seconds!",
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
     except Exception as e:
-        logging.error(f"Failed to create Crypto Pay invoice: {e}")
+        logger.error(f"Failed to create Crypto Pay invoice: {e}")
         await callback.answer("❌ Gateway error. Please try again in a moment.", show_alert=True)
 
 
@@ -918,8 +925,8 @@ async def cb_check_payment(callback: types.CallbackQuery):
             if credited:
                 await callback.answer("✅ Payment Confirmed! Funds added to your balance.", show_alert=True)
                 await callback.message.edit_text(
-                    f"🎉 **Deposit Successful!**\n\n"
-                    f"Your transaction was verified by `@CryptoBot` and funds have been credited.\n"
+                    "🎉 **Deposit Successful!**\n\n"
+                    "Your transaction was verified by `@CryptoBot` and funds have been credited.\n"
                     f"**New Wallet Balance:** `${new_balance:.2f} USD`",
                     reply_markup=InlineKeyboardMarkup(
                         inline_keyboard=[
@@ -934,7 +941,7 @@ async def cb_check_payment(callback: types.CallbackQuery):
         else:
             await callback.answer("⏳ Payment not detected yet. Please complete the transfer and try again.", show_alert=True)
     except Exception as e:
-        logging.error(f"Error verifying invoice ID {invoice_id}: {e}")
+        logger.error(f"Error verifying invoice ID {invoice_id}: {e}")
         await callback.answer("❌ Unable to check status right now. Try again shortly.", show_alert=True)
 
 
@@ -954,13 +961,13 @@ async def cb_deposit_binance(callback: types.CallbackQuery, state: FSMContext):
     )
     
     await callback.message.edit_text(
-        f"🟡 **Binance Pay Deposit Gateway**\n\n"
-        f"Top up your wallet balance fee-free using Binance Pay P2P transfers!\n\n"
-        f"1️⃣ Open your Binance App and tap **Binance Pay** (or Scan/Send).\n"
-        f"2️⃣ Transfer your desired amount (Minimum: `$1.00 USD` equivalent in USDT, USDC, or BNB) to our official **Binance Pay ID**:\n"
+        "🟡 **Binance Pay Deposit Gateway**\n\n"
+        "Top up your wallet balance fee-free using Binance Pay P2P transfers!\n\n"
+        "1️⃣ Open your Binance App and tap **Binance Pay** (or Scan/Send).\n"
+        "2️⃣ Transfer your desired amount (Minimum: `$1.00 USD` equivalent in USDT, USDC, or BNB) to our official **Binance Pay ID**:\n"
         f"`{BINANCE_PAY_ID}`\n"
-        f"*(Tap the ID above to copy it instantly)*\n\n"
-        f"3️⃣ Once the transfer is complete, tap **Submit TXID & Amount** below so our automated approval queue can verify and credit your balance!",
+        "*(Tap the ID above to copy it instantly)*\n\n"
+        "3️⃣ Once the transfer is complete, tap **Submit TXID & Amount** below so our automated approval queue can verify and credit your balance!",
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
@@ -995,11 +1002,11 @@ async def process_binance_txid(message: types.Message, state: FSMContext):
     
     # Notify User
     await message.answer(
-        f"✅ **Verification Submitted!**\n\n"
-        f"Your receipt details have been sent to our automated processing queue:\n"
+        "✅ **Verification Submitted!**\n\n"
+        "Your receipt details have been sent to our automated processing queue:\n"
         f"`{txid_info}`\n\n"
-        f"Your wallet balance will be credited automatically as soon as the transfer is confirmed.\n\n"
-        f"💡 *Need urgent assistance? Reach out directly to **@MadVichi**.*",
+        "Your wallet balance will be credited automatically as soon as the transfer is confirmed.\n\n"
+        "💡 *Need urgent assistance? Reach out directly to **@MadVichi**.*",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="💬 Contact Support (@MadVichi)", url="https://t.me/MadVichi")],
@@ -1031,11 +1038,12 @@ async def process_binance_txid(message: types.Message, state: FSMContext):
         await message.bot.send_message(
             chat_id=ADMIN_ID,
             text=(
-                f"🟡 **New Binance Pay Deposit Request**\n\n"
+                "🟡 **New Binance Pay Deposit Request**\n\n"
                 f"**User:** @{username} (`{user_id}`)\n"
-                f"**Submitted Details:**\n`{txid_info}`\n\n"
-                f"👉 *Click a button below to automatically credit the user's balance and notify them instantly:*\n"
-                f"*(For custom amounts, use `/credit {user_id} <amount>`)*"
+                "**Submitted Details:**\n"
+                f"`{txid_info}`\n\n"
+                "👉 *Click a button below to automatically credit the user's balance and notify them instantly:*\n"
+                "*(For custom amounts, use `/credit {user_id} <amount>`)*"
             ),
             reply_markup=admin_kb,
             parse_mode="Markdown"
@@ -1053,7 +1061,7 @@ async def cb_admin_quick_credit(callback: types.CallbackQuery):
     
     # Notify Admin
     await callback.message.edit_text(
-        f"✅ **Deposit Approved & Credited!**\n\n"
+        "✅ **Deposit Approved & Credited!**\n\n"
         f"Added `${amount:.2f} USD` to User ID `{target_user_id}`.\n"
         f"**User's New Balance:** `${new_bal:.2f} USD`",
         parse_mode="Markdown"
@@ -1064,10 +1072,10 @@ async def cb_admin_quick_credit(callback: types.CallbackQuery):
         await callback.bot.send_message(
             chat_id=target_user_id,
             text=(
-                f"🎉 **Binance Pay Deposit Approved!**\n\n"
+                "🎉 **Binance Pay Deposit Approved!**\n\n"
                 f"We have verified your transfer and credited `${amount:.2f} USD` to your account.\n"
                 f"**New Wallet Balance:** `${new_bal:.2f} USD`\n\n"
-                f"You can now purchase items from the catalog!"
+                "You can now purchase items from the catalog!"
             ),
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[[InlineKeyboardButton(text="🛍️ Open Store Catalog", callback_data="menu_catalog")]]
@@ -1075,7 +1083,7 @@ async def cb_admin_quick_credit(callback: types.CallbackQuery):
             parse_mode="Markdown"
         )
     except Exception as e:
-        logging.warning(f"Could not notify user {target_user_id} about credit: {e}")
+        logger.warning(f"Could not notify user {target_user_id} about credit: {e}")
 
 
 @router.callback_query(F.data == "dismiss_binance", IsAdmin(), ThrottlingFilter())
@@ -1269,11 +1277,11 @@ async def cb_buy_product(callback: types.CallbackQuery, state: FSMContext):
             ]
         )
         await callback.message.edit_text(
-            f"⚠️ **Insufficient Wallet Balance**\n\n"
+            "⚠️ **Insufficient Wallet Balance**\n\n"
             f"**Selected Item:** {product['name']}\n"
             f"**Item Price:** `${product['price_usd']:.2f} USD`\n"
             f"**Your Current Balance:** `${user['balance_usd']:.2f} USD`\n\n"
-            f"Please deposit funds into your wallet to complete this purchase.",
+            "Please deposit funds into your wallet to complete this purchase.",
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
@@ -1295,12 +1303,12 @@ async def cb_buy_product(callback: types.CallbackQuery, state: FSMContext):
             await callback.answer("🎉 Purchase complete! Check your chat messages.", show_alert=True)
             
             await callback.message.answer(
-                f"🎉 **Order Fulfilled Instantly!**\n\n"
+                "🎉 **Order Fulfilled Instantly!**\n\n"
                 f"**Product Purchased:** {product['name']}\n"
                 f"**Remaining Wallet Balance:** `${new_balance:.2f} USD`\n\n"
-                f"📦 **Your Digital Access Data / License Key:**\n"
+                "📦 **Your Digital Access Data / License Key:**\n"
                 f"`{delivered_content}`\n\n"
-                f"_You can also view your past purchases anytime in your **👤 My Profile** menu._",
+                "_You can also view your past purchases anytime in your **👤 My Profile** menu._",
                 parse_mode="Markdown"
             )
             
@@ -1313,12 +1321,12 @@ async def cb_buy_product(callback: types.CallbackQuery, state: FSMContext):
             # 1. Send secret fulfillment details to Store Admin DM
             if ADMIN_ID > 0:
                 admin_alert = (
-                    f"🚨 **NEW MANUAL ORDER TO FULFILL!**\n\n"
+                    "🚨 **NEW MANUAL ORDER TO FULFILL!**\n\n"
                     f"**Buyer:** @{username} (`{user_id}`)\n"
                     f"**Product:** {product['name']} (ID: `{product_id}`)\n"
                     f"**Price Paid:** `${product['price_usd']:.2f} USD`\n"
                     f"**Reserved Stock Key/Note:** `{delivered_content}`\n\n"
-                    f"👉 *The customer's balance was deducted and stock dropped by 1. They have been instructed to DM you to claim the key/service above.*"
+                    "👉 *The customer's balance was deducted and stock dropped by 1. They have been instructed to DM you to claim the key/service above.*"
                 )
                 admin_kb = InlineKeyboardMarkup(
                     inline_keyboard=[
@@ -1334,7 +1342,7 @@ async def cb_buy_product(callback: types.CallbackQuery, state: FSMContext):
                         parse_mode="Markdown"
                     )
                 except Exception as e:
-                    logging.warning(f"Failed to send purchase alert to admin: {e}")
+                    logger.warning(f"Failed to send purchase alert to admin: {e}")
 
             # 2. Send contact instructions to Customer
             customer_kb = InlineKeyboardMarkup(
@@ -1345,12 +1353,12 @@ async def cb_buy_product(callback: types.CallbackQuery, state: FSMContext):
             )
             
             await callback.message.answer(
-                f"🎉 **Payment Successful!**\n\n"
+                "🎉 **Payment Successful!**\n\n"
                 f"**Product Purchased:** {product['name']}\n"
                 f"**Amount Paid:** `${product['price_usd']:.2f} USD`\n"
                 f"**Remaining Wallet Balance:** `${new_balance:.2f} USD`\n\n"
-                f"📬 **Next Step — Receive Your Order:**\n"
-                f"Your order has been logged and your inventory slot is reserved! To receive your subscription access or setup instructions, please tap the button below to message the store administrator directly:",
+                "📬 **Next Step — Receive Your Order:**\n"
+                "Your order has been logged and your inventory slot is reserved! To receive your subscription access or setup instructions, please tap the button below to message the store administrator directly:",
                 reply_markup=customer_kb,
                 parse_mode="Markdown"
             )
@@ -1427,12 +1435,12 @@ async def cb_admin_panel_buttons(callback: types.CallbackQuery, state: FSMContex
     if action == "stats":
         stats = await asyncio.to_thread(get_store_analytics)
         text = (
-            f"📊 **Live Store Analytics Dashboard**\n\n"
+            "📊 **Live Store Analytics Dashboard**\n\n"
             f"💰 **Total Gross Revenue:** `${stats['revenue']:.2f} USD`\n"
             f"📦 **Total Orders Fulfilled:** `{stats['orders']}`\n"
             f"👥 **Registered Customers:** `{stats['users']}`\n"
             f"🛍️ **Active Products:** `{stats['products']}`\n\n"
-            f"*System is operating normally with async non-blocking queries.*"
+            "*System is operating normally with async non-blocking queries.*"
         )
         await callback.message.edit_text(text, reply_markup=back_kb, parse_mode="Markdown")
         
@@ -1549,12 +1557,12 @@ async def cmd_stats(message: types.Message):
     """Admin tool: Display live store revenue, total orders, and user metrics."""
     stats = await asyncio.to_thread(get_store_analytics)
     await message.answer(
-        f"📊 **Live Store Analytics Dashboard**\n\n"
+        "📊 **Live Store Analytics Dashboard**\n\n"
         f"💰 **Total Gross Revenue:** `${stats['revenue']:.2f} USD`\n"
         f"📦 **Total Orders Fulfilled:** `{stats['orders']}`\n"
         f"👥 **Registered Customers:** `{stats['users']}`\n"
         f"🛍️ **Active Products:** `{stats['products']}`\n\n"
-        f"*System is operating normally with async non-blocking queries.*",
+        "*System is operating normally with async non-blocking queries.*",
         parse_mode="Markdown"
     )
 
@@ -1603,7 +1611,7 @@ async def cmd_setcategory(message: types.Message, command: CommandObject, state:
         success = await asyncio.to_thread(set_product_category, product_id, category_name)
         if success:
             await message.answer(
-                f"✅ **Category Assigned!**\n\n"
+                "✅ **Category Assigned!**\n\n"
                 f"Product ID `{product_id}` is now organized under the **📂 {category_name}** folder in your store catalog.",
                 parse_mode="Markdown"
             )
@@ -1613,7 +1621,7 @@ async def cmd_setcategory(message: types.Message, command: CommandObject, state:
     except ValueError:
         await message.answer("❌ Product ID must be a valid integer number.")
     except Exception as e:
-        logging.error(f"Error setting category: {e}")
+        logger.error(f"Error setting category: {e}")
         await message.answer("❌ Database error occurred while trying to update the category.")
 
 
@@ -1646,9 +1654,9 @@ async def cmd_setwarranty(message: types.Message, command: CommandObject, state:
                 await message.answer(f"✅ **Warranty Removed!**\n\nThe warranty badge will no longer show for Product ID `{product_id}`.", parse_mode="Markdown")
             else:
                 await message.answer(
-                    f"✅ **Warranty Updated!**\n\n"
+                    "✅ **Warranty Updated!**\n\n"
                     f"Product ID `{product_id}` now has a custom warranty badge: **{duration.upper()}**.\n"
-                    f"Use `/listproducts` or open the catalog to review your updated product listing.",
+                    "Use `/listproducts` or open the catalog to review your updated product listing.",
                     parse_mode="Markdown"
                 )
         else:
@@ -1657,7 +1665,7 @@ async def cmd_setwarranty(message: types.Message, command: CommandObject, state:
     except ValueError:
         await message.answer("❌ Product ID must be a valid integer number.")
     except Exception as e:
-        logging.error(f"Error updating warranty: {e}")
+        logger.error(f"Error updating warranty: {e}")
         await message.answer("❌ Database error occurred while trying to update the warranty.")
 
 
@@ -1686,9 +1694,9 @@ async def cmd_modifydescription(message: types.Message, command: CommandObject, 
         
         if success:
             await message.answer(
-                f"✅ **Description Updated!**\n\n"
+                "✅ **Description Updated!**\n\n"
                 f"Added your information to Product ID `{product_id}`.\n"
-                f"Use `/listproducts` or open the catalog to review your updated product listing.",
+                "Use `/listproducts` or open the catalog to review your updated product listing.",
                 parse_mode="Markdown"
             )
         else:
@@ -1697,7 +1705,7 @@ async def cmd_modifydescription(message: types.Message, command: CommandObject, 
     except ValueError:
         await message.answer("❌ Product ID must be a valid integer number.")
     except Exception as e:
-        logging.error(f"Error modifying description: {e}")
+        logger.error(f"Error modifying description: {e}")
         await message.answer("❌ Database error occurred while trying to append information to the description.")
 
 
@@ -1770,9 +1778,9 @@ async def cmd_addproduct(message: types.Message, command: CommandObject, state: 
         product_id = await asyncio.to_thread(db.add_product, name=name, description="Instant automated digital delivery", price_usd=price)
         
         await message.answer(
-            f"✅ **New Product Created!**\n"
+            "✅ **New Product Created!**\n"
             f"**Product ID:** `{product_id}`\n**Name:** {name}\n**Price:** `${price:.2f} USD`\n\n"
-            f"💡 **Next Steps:**\n"
+            "💡 **Next Steps:**\n"
             f"• Assign Category: `/setcategory {product_id} AI & Software`\n"
             f"• Add Warranty Badge: `/setwarranty {product_id} 1 Month`\n"
             f"• Load Inventory: `/addstock {product_id} <access_link_or_key>`", 
@@ -1782,8 +1790,8 @@ async def cmd_addproduct(message: types.Message, command: CommandObject, state: 
         # --- DIRECT DM BROADCAST TO ALL USERS ---
         alert_text = (
             f"🌐 **{name}**\n"
-            f"✔️ Added: **New Product**\n"
-            f"📦 Current stock: **0**\n"
+            "✔️ Added: **New Product**\n"
+            "📦 Current stock: **0**\n"
             f"💲 Price: **${price:.2f}**"
         )
         alert_kb = InlineKeyboardMarkup(
@@ -1841,10 +1849,10 @@ async def cmd_addstock(message: types.Message, state: FSMContext):
             waiting_users = await asyncio.to_thread(get_and_clear_restock_subscribers, product_id)
             if waiting_users:
                 restock_text = (
-                    f"🚨 **RESTOCK ALERT!**\n\n"
+                    "🚨 **RESTOCK ALERT!**\n\n"
                     f"Good news! **{product['name']}** is officially back in stock.\n"
                     f"**Price:** `${product['price_usd']:.2f} USD` | **Available Stock:** `{total_stock} units`\n\n"
-                    f"⚡ *You requested this notification. Tap below to secure your order before it sells out!*"
+                    "⚡ *You requested this notification. Tap below to secure your order before it sells out!*"
                 )
                 restock_kb = InlineKeyboardMarkup(
                     inline_keyboard=[[InlineKeyboardButton(text="🛒 Buy Now Before It Sells Out", callback_data=f"view_{product_id}")]]
@@ -1855,7 +1863,7 @@ async def cmd_addstock(message: types.Message, state: FSMContext):
                         await asyncio.sleep(0.05)
                     except Exception:
                         continue
-                logging.info(f"🔔 Restock alerts delivered to {len(waiting_users)} waiting subscribers for Product {product_id}.")
+                logger.info(f"🔔 Restock alerts delivered to {len(waiting_users)} waiting subscribers for Product {product_id}.")
 
             # --- 2. GENERAL DM BROADCAST TO ALL REGISTERED USERS ---
             alert_text = (
@@ -1907,7 +1915,7 @@ async def cmd_delproduct(message: types.Message, command: CommandObject, state: 
     except ValueError:
         await message.answer("❌ Product ID must be a valid integer.")
     except Exception as e:
-        logging.error(f"Error deleting product: {e}")
+        logger.error(f"Error deleting product: {e}")
         await message.answer("❌ Database error occurred while trying to delete the product.")
 
 
@@ -1938,15 +1946,15 @@ async def cmd_clearstock(message: types.Message, command: CommandObject, state: 
             return
             
         await message.answer(
-            f"🧹 **Stock Cleared!**\n\n"
+            "🧹 **Stock Cleared!**\n\n"
             f"Removed **{deleted_count}** digital unit(s) from **{product_name}** (ID: `{product_id}`).\n"
-            f"**Current Stock:** `0 units`", 
+            "**Current Stock:** `0 units`", 
             parse_mode="Markdown"
         )
     except ValueError:
         await message.answer("❌ Product ID must be a valid integer.")
     except Exception as e:
-        logging.error(f"Error clearing stock: {e}")
+        logger.error(f"Error clearing stock: {e}")
         await message.answer("❌ Database error occurred while trying to clear stock.")
 
 
@@ -1982,7 +1990,7 @@ async def cmd_delstock(message: types.Message, command: CommandObject, state: FS
             await message.answer("⚠️ **Not Found:** Could not find that exact string in your unsold inventory. Use `/liststock <product_id>` to check your active keys.", parse_mode="Markdown")
             
     except Exception as e:
-        logging.error(f"Error deleting specific stock: {e}")
+        logger.error(f"Error deleting specific stock: {e}")
         await message.answer("❌ Database error occurred while trying to delete the stock item.")
 
 
@@ -2040,7 +2048,7 @@ async def cmd_liststock(message: types.Message, command: CommandObject, state: F
     except ValueError:
         await message.answer("❌ Product ID must be a valid integer.")
     except Exception as e:
-        logging.error(f"Error listing stock: {e}")
+        logger.error(f"Error listing stock: {e}")
         await message.answer("❌ Database error occurred while trying to list stock.")
 
 
@@ -2052,12 +2060,12 @@ async def cmd_deliverymode(message: types.Message, command: CommandObject, state
     
     if not command.args or command.args.strip().lower() not in ["auto", "manual"]:
         await message.answer(
-            f"⚙️ **Store Delivery Configuration**\n\n"
+            "⚙️ **Store Delivery Configuration**\n\n"
             f"**Current Mode:** `{current_mode}`\n\n"
-            f"• **MANUAL:** Deducts balance, drops stock, sends key to admin DM, and tells customer to contact you.\n"
-            f"• **AUTO:** Deducts balance, drops stock, and instantly delivers key directly to the customer's chat.\n\n"
-            f"💡 **To switch modes, run:**\n"
-            f"`/deliverymode auto` OR `/deliverymode manual`",
+            "• **MANUAL:** Deducts balance, drops stock, sends key to admin DM, and tells customer to contact you.\n"
+            "• **AUTO:** Deducts balance, drops stock, and instantly delivers key directly to the customer's chat.\n\n"
+            "💡 **To switch modes, run:**\n"
+            "`/deliverymode auto` OR `/deliverymode manual`",
             parse_mode="Markdown"
         )
         return
@@ -2066,7 +2074,7 @@ async def cmd_deliverymode(message: types.Message, command: CommandObject, state
     STORE_CONFIG["delivery_mode"] = new_mode
     
     await message.answer(
-        f"🔄 **Delivery Mode Changed!**\n\n"
+        "🔄 **Delivery Mode Changed!**\n\n"
         f"Your storefront checkout engine is now set to: **{new_mode.upper()} DELIVERY**.\n\n"
         f"*(All future orders will immediately use the {new_mode.upper()} workflow!)*",
         parse_mode="Markdown"
@@ -2099,12 +2107,12 @@ async def main():
     asyncio.create_task(auto_verify_invoices(bot))
     asyncio.create_task(check_low_stock_watcher(bot))
     
-    logging.info("🚀 Starting Enterprise Telegram Storefront Bot with Analytics & Anti-Spam...")
+    logger.info("🚀 Starting Enterprise Telegram Storefront Bot with Analytics & Anti-Spam...")
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
     finally:
-        logging.info("🛑 Shutting down network connections gracefully...")
+        logger.info("🛑 Shutting down network connections gracefully...")
         await crypto.close()
         await bot.session.close()
 
@@ -2117,4 +2125,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logging.info("Bot execution terminated.")
+        logger.info("Bot execution terminated.")

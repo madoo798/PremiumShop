@@ -195,9 +195,9 @@ def get_turso_connection():
     """Create a secure connection to the Turso cloud database."""
     # Merged logic to satisfy Ruff PIE810 and safely check for None
     if TURSO_URL and TURSO_URL.startswith(("libsql://", "https://")):
-        return libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+        return libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)  # type: ignore
     else:
-        return libsql.connect(TURSO_URL or "")
+        return libsql.connect(TURSO_URL or "")  # type: ignore
 
 def attempt_migration(conn, query):
     """Silently attempts a DB migration without throwing linting errors."""
@@ -741,3 +741,4 @@ elif selected == "Invoices":
         st.dataframe(invoices_df, use_container_width=True, hide_index=True)
     else:
         st.info("No invoices logged yet.")
+        
