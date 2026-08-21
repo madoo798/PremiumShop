@@ -9,7 +9,7 @@ from streamlit_option_menu import option_menu
 # PAGE CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="Altalis & Celesta Admin Dashboard",
+    page_title="PremiumShop Admin Dashboard",
     page_icon="🗝️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -338,7 +338,7 @@ def get_single_value(query: str, params: tuple = ()) -> float:
 with st.sidebar:
     st.markdown(
         "<div style='font-family:Fraunces,serif;font-size:26px;font-weight:600;"
-        "color:#E4E6EA;letter-spacing:0.5px;'>🗝️ Altalis <span style='color:#C9A227;'>&</span> Celesta</div>",
+        "color:#E4E6EA;letter-spacing:0.5px;'>🗝️ Premium<span style='color:#C9A227;'>Shop</span></div>",
         unsafe_allow_html=True
     )
     st.markdown(
@@ -741,4 +741,3 @@ elif selected == "Invoices":
         st.dataframe(invoices_df, use_container_width=True, hide_index=True)
     else:
         st.info("No invoices logged yet.")
-        
